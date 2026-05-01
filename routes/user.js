@@ -200,6 +200,9 @@ router.post("/login", upload.none(), async (req, res) => {
         isVerified: user.isVerified,
         role: user.role,
         location: user.location,
+        age: user.age,
+        gender: user.gender,
+        height: user.height,
       },
       token,
     });
