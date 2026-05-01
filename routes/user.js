@@ -4,7 +4,7 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const { Op } = require("sequelize");
 const uploadImage = require("../middlewares/uploads");
-const { User, UserDevice } = require("../models");
+const { User, UserDevice, UserMedication, Medication } = require("../models");
 
 const router = express.Router();
 const upload = multer();
@@ -45,6 +45,69 @@ const requireAuth = (req, res, next) => {
     return res.status(401).json({ error: "Invalid token" });
   }
 };
+
+const requireAdmin = async (req, res, next) => {
+  const user = await User.findByPk(req.authUser.id);
+  if (!user || user.role !== "admin") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  req.currentUser = user;
+  return next();
+};
+
+const normalizeKeySteps = (keySteps) => {
+  if (Array.isArray(keySteps)) {
+    return keySteps.map((step) => String(step).trim()).filter(Boolean);
+  }
+
+  if (typeof keySteps === "string") {
+    const trimmed = keySteps.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((step) => String(step).trim()).filter(Boolean);
+      }
+    } catch (_) {
+      return trimmed
+        .split(/\r?\n/)
+        .map((step) => step.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
+};
+
+const medicationPayload = (body) => {
+  const keySteps = normalizeKeySteps(body.key_steps);
+  return {
+    name: String(body.name || "").trim(),
+    short_description: String(body.short_description || "").trim(),
+    long_description: String(body.long_description || "").trim(),
+    schedule_description: String(body.schedule_description || "").trim(),
+    key_steps: keySteps,
+    video_url: String(body.video_url || "").trim() || null,
+    icon: String(body.icon || "").trim() || null,
+    color: String(body.color || "").trim() || null,
+    is_active:
+      body.is_active === undefined ? true : String(body.is_active) !== "false",
+  };
+};
+
+const serializeMedication = (medication) => ({
+  id: medication.id,
+  name: medication.name,
+  short_description: medication.short_description,
+  long_description: medication.long_description,
+  schedule_description: medication.schedule_description,
+  key_steps: medication.key_steps || [],
+  video_url: medication.video_url,
+  icon: medication.icon,
+  color: medication.color,
+  is_active: medication.is_active,
+});
 
 const saveUserDevice = async (userId, playerId) => {
   const cleanPlayerId = String(playerId || "").trim();
@@ -228,6 +291,192 @@ router.post("/users/device", upload.none(), requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("Save user device error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/medications", requireAuth, async (req, res) => {
+  try {
+    const medications = await Medication.findAll({
+      where: { is_active: true },
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.status(200).json({
+      medications: medications.map(serializeMedication),
+    });
+  } catch (err) {
+    console.error("Get medications error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/admin/medications", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const medications = await Medication.findAll({
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.status(200).json({
+      medications: medications.map(serializeMedication),
+    });
+  } catch (err) {
+    console.error("Admin get medications error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post(
+  "/admin/medications",
+  upload.none(),
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const payload = medicationPayload(req.body);
+
+      if (
+        !payload.name ||
+        !payload.short_description ||
+        !payload.long_description ||
+        !payload.schedule_description ||
+        payload.key_steps.length === 0
+      ) {
+        return res.status(400).json({
+          error:
+            "name, short_description, long_description, schedule_description and key_steps are required",
+        });
+      }
+
+      const medication = await Medication.create(payload);
+      return res.status(201).json({
+        message: "Medication created successfully",
+        medication: serializeMedication(medication),
+      });
+    } catch (err) {
+      console.error("Create medication error:", err);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+router.put(
+  "/admin/medications/:id",
+  upload.none(),
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const medication = await Medication.findByPk(req.params.id);
+      if (!medication) {
+        return res.status(404).json({ error: "Medication not found" });
+      }
+
+      const payload = medicationPayload(req.body);
+      if (
+        !payload.name ||
+        !payload.short_description ||
+        !payload.long_description ||
+        !payload.schedule_description ||
+        payload.key_steps.length === 0
+      ) {
+        return res.status(400).json({
+          error:
+            "name, short_description, long_description, schedule_description and key_steps are required",
+        });
+      }
+
+      await medication.update(payload);
+      return res.status(200).json({
+        message: "Medication updated successfully",
+        medication: serializeMedication(medication),
+      });
+    } catch (err) {
+      console.error("Update medication error:", err);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+router.delete(
+  "/admin/medications/:id",
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const medication = await Medication.findByPk(req.params.id);
+      if (!medication) {
+        return res.status(404).json({ error: "Medication not found" });
+      }
+
+      await medication.update({ is_active: false });
+      return res.status(200).json({ message: "Medication disabled" });
+    } catch (err) {
+      console.error("Disable medication error:", err);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+router.get("/users/medications", requireAuth, async (req, res) => {
+  try {
+    const medications = await UserMedication.findAll({
+      where: { user_id: req.authUser.id },
+      include: [{ model: Medication, as: "medication", where: { is_active: true } }],
+      order: [["createdAt", "ASC"]],
+    });
+
+    return res.status(200).json({
+      medication_ids: medications.map((item) => String(item.medication_id)),
+      medications: medications.map((item) => serializeMedication(item.medication)),
+    });
+  } catch (err) {
+    console.error("Get user medications error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.put("/users/medications", requireAuth, async (req, res) => {
+  try {
+    const rawIds = req.body.medication_ids;
+    const medicationIds = Array.isArray(rawIds)
+      ? rawIds
+      : typeof rawIds === "string"
+      ? JSON.parse(rawIds)
+      : [];
+
+    if (!Array.isArray(medicationIds)) {
+      return res.status(400).json({ error: "medication_ids must be an array" });
+    }
+
+    const cleanIds = [
+      ...new Set(
+        medicationIds
+          .map((id) => Number.parseInt(id, 10))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      ),
+    ];
+
+    const existingMedications = await Medication.findAll({
+      where: { id: cleanIds, is_active: true },
+      attributes: ["id"],
+    });
+    const existingIds = existingMedications.map((item) => item.id);
+
+    await UserMedication.destroy({ where: { user_id: req.authUser.id } });
+
+    if (existingIds.length > 0) {
+      await UserMedication.bulkCreate(
+        existingIds.map((id) => ({
+          user_id: req.authUser.id,
+          medication_id: id,
+        }))
+      );
+    }
+
+    return res.status(200).json({ medication_ids: existingIds.map(String) });
+  } catch (err) {
+    console.error("Save user medications error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
