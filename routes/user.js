@@ -23,7 +23,50 @@ const generateToken = (user) =>
     { expiresIn: "700d" }
   );
 
+const tokenFromHeader = (authorization) => {
+  const value = String(authorization || "").trim();
+  if (value.toLowerCase().startsWith("bearer ")) {
+    return value.slice(7).trim();
+  }
+  return value;
+};
 
+const requireAuth = (req, res, next) => {
+  const authToken = tokenFromHeader(req.headers.authorization);
+
+  if (!authToken) {
+    return res.status(401).json({ error: "Token is missing" });
+  }
+
+  try {
+    req.authUser = jwt.verify(authToken, process.env.JWT_SECRET);
+    return next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+};
+
+const saveUserDevice = async (userId, playerId) => {
+  const cleanPlayerId = String(playerId || "").trim();
+  if (!cleanPlayerId) return null;
+
+  const existingDevice = await UserDevice.findOne({
+    where: { player_id: cleanPlayerId },
+  });
+
+  if (existingDevice) {
+    if (existingDevice.user_id !== userId) {
+      existingDevice.user_id = userId;
+      await existingDevice.save();
+    }
+    return existingDevice;
+  }
+
+  return UserDevice.create({
+    user_id: userId,
+    player_id: cleanPlayerId,
+  });
+};
 
 router.post("/users", uploadImage.array("images", 5), async (req, res) => {
   const { name, location, password, role = "user" } = req.body;
@@ -79,7 +122,7 @@ router.post("/users", uploadImage.array("images", 5), async (req, res) => {
 });
 
 router.post("/onboarding/register", upload.none(), async (req, res) => {
-  const { name, governorate, age, gender, height, password } = req.body;
+  const { name, governorate, age, gender, height, password, player_id } = req.body;
   let { phone } = req.body;
 
   try {
@@ -139,6 +182,7 @@ router.post("/onboarding/register", upload.none(), async (req, res) => {
     });
 
     const token = generateToken(user);
+    await saveUserDevice(user.id, player_id);
 
     return res.status(201).json({
       message: "Account created successfully",
@@ -157,6 +201,33 @@ router.post("/onboarding/register", upload.none(), async (req, res) => {
     });
   } catch (err) {
     console.error("Onboarding register error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/users/device", upload.none(), requireAuth, async (req, res) => {
+  try {
+    const playerId = req.body.player_id;
+    if (!playerId) {
+      return res.status(400).json({ error: "player_id is required" });
+    }
+
+    const user = await User.findByPk(req.authUser.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const device = await saveUserDevice(user.id, playerId);
+    return res.status(201).json({
+      message: "Device saved successfully",
+      device: {
+        id: device.id,
+        player_id: device.player_id,
+        user_id: device.user_id,
+      },
+    });
+  } catch (err) {
+    console.error("Save user device error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });

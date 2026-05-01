@@ -6,12 +6,14 @@ const sequelize = require("./config/db");
 
 const usersRouter = require("./routes/user");
 const adsRouter = require("./routes/ads");
+const { startWeatherNotificationScheduler } = require("./services/weather_scheduler");
 
 
 sequelize
   .sync({ alter: true })
   .then(async () => {
     console.log("Database & tables synced!");
+    startWeatherNotificationScheduler();
   })
   .catch((err) => {
     console.error("Error syncing database:", err);
