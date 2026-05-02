@@ -4,7 +4,13 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const { Op } = require("sequelize");
 const uploadImage = require("../middlewares/uploads");
-const { User, UserDevice, UserMedication, Medication } = require("../models");
+const {
+  User,
+  UserDevice,
+  UserMedication,
+  Medication,
+  NotificationLog,
+} = require("../models");
 
 const router = express.Router();
 const upload = multer();
@@ -299,6 +305,32 @@ router.post("/users/device", upload.none(), requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("Save user device error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/users/weather-notifications", requireAuth, async (req, res) => {
+  try {
+    const notifications = await NotificationLog.findAll({
+      where: {
+        user_id: req.authUser.id,
+        title: "AsthmaCare Weather",
+        status: "sent",
+      },
+      order: [["createdAt", "DESC"]],
+      limit: 2,
+    });
+
+    return res.status(200).json({
+      notifications: notifications.map((notification) => ({
+        id: notification.id,
+        title: notification.title,
+        message: notification.message,
+        created_at: notification.createdAt,
+      })),
+    });
+  } catch (err) {
+    console.error("Get weather notifications error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
