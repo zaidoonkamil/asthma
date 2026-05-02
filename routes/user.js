@@ -80,9 +80,9 @@ const normalizeKeySteps = (keySteps) => {
   return [];
 };
 
-const medicationPayload = (body) => {
+const medicationPayload = (body, file) => {
   const keySteps = normalizeKeySteps(body.key_steps);
-  return {
+  const payload = {
     name: String(body.name || "").trim(),
     short_description: String(body.short_description || "").trim(),
     long_description: String(body.long_description || "").trim(),
@@ -94,6 +94,12 @@ const medicationPayload = (body) => {
     is_active:
       body.is_active === undefined ? true : String(body.is_active) !== "false",
   };
+
+  if (file) {
+    payload.image = file.filename;
+  }
+
+  return payload;
 };
 
 const serializeMedication = (medication) => ({
@@ -104,6 +110,8 @@ const serializeMedication = (medication) => ({
   schedule_description: medication.schedule_description,
   key_steps: medication.key_steps || [],
   video_url: medication.video_url,
+  image: medication.image,
+  image_url: medication.image ? `/uploads/${medication.image}` : null,
   icon: medication.icon,
   color: medication.color,
   is_active: medication.is_active,
@@ -328,12 +336,12 @@ router.get("/admin/medications", requireAuth, requireAdmin, async (req, res) => 
 
 router.post(
   "/admin/medications",
-  upload.none(),
+  uploadImage.single("image"),
   requireAuth,
   requireAdmin,
   async (req, res) => {
     try {
-      const payload = medicationPayload(req.body);
+      const payload = medicationPayload(req.body, req.file);
 
       if (
         !payload.name ||
@@ -362,7 +370,7 @@ router.post(
 
 router.put(
   "/admin/medications/:id",
-  upload.none(),
+  uploadImage.single("image"),
   requireAuth,
   requireAdmin,
   async (req, res) => {
@@ -372,7 +380,7 @@ router.put(
         return res.status(404).json({ error: "Medication not found" });
       }
 
-      const payload = medicationPayload(req.body);
+      const payload = medicationPayload(req.body, req.file);
       if (
         !payload.name ||
         !payload.short_description ||
