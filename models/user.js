@@ -1,5 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
+const Doctor = require("./doctor");
 
 const User = sequelize.define("User", {
     id: {
@@ -34,6 +35,24 @@ const User = sequelize.define("User", {
     },
     height: {
         type: DataTypes.INTEGER,
+        allowNull: true,
+    },
+    doctor_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: Doctor,
+            key: "id",
+        },
+        onDelete: "SET NULL",
+        onUpdate: "CASCADE",
+    },
+    doctor_name: {
+        type: DataTypes.STRING,
+        allowNull: true,
+    },
+    doctor_phone: {
+        type: DataTypes.STRING,
         allowNull: true,
     },
     password: {

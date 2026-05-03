@@ -10,6 +10,7 @@ const {
   UserMedication,
   Medication,
   NotificationLog,
+  Doctor,
 } = require("../models");
 
 const router = express.Router();
@@ -20,6 +21,12 @@ const normalizePhone = (phone) => {
   if (!phone) return "";
   return String(phone).trim().replace(/\s+/g, "");
 };
+
+const serializeDoctor = (doctor) => ({
+  id: doctor.id,
+  name: doctor.name,
+  phone: doctor.phone,
+});
 
 
 const generateToken = (user) =>
@@ -199,17 +206,34 @@ router.post("/users", uploadImage.array("images", 5), async (req, res) => {
 });
 
 router.post("/onboarding/register", upload.none(), async (req, res) => {
-  const { name, governorate, age, gender, height, password, player_id } = req.body;
+  const {
+    name,
+    governorate,
+    age,
+    gender,
+    height,
+    password,
+    player_id,
+    doctor_id,
+    doctor_name,
+  } = req.body;
   let { phone } = req.body;
+  let { doctor_phone } = req.body;
 
   try {
     const cleanName = String(name || "").trim();
     phone = normalizePhone(phone);
+    doctor_phone = normalizePhone(doctor_phone);
     const cleanGovernorate = String(governorate || "").trim();
     const cleanGender = String(gender || "").trim();
+    const cleanDoctorName = String(doctor_name || "").trim();
+    const parsedDoctorId = Number.parseInt(doctor_id, 10);
     const parsedAge = Number.parseInt(age, 10);
     const parsedHeight = Number.parseInt(height, 10);
     const cleanPassword = String(password || "");
+    let selectedDoctorId = null;
+    let selectedDoctorName = cleanDoctorName;
+    let selectedDoctorPhone = doctor_phone;
 
     if (
       !cleanName ||
@@ -244,6 +268,18 @@ router.post("/onboarding/register", upload.none(), async (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
+    if (!Number.isNaN(parsedDoctorId)) {
+      const doctor = await Doctor.findByPk(parsedDoctorId);
+      if (!doctor) {
+        return res.status(400).json({ error: "Selected doctor was not found" });
+      }
+      selectedDoctorId = doctor.id;
+      selectedDoctorName = doctor.name;
+      selectedDoctorPhone = doctor.phone;
+    } else if (!selectedDoctorName || !selectedDoctorPhone) {
+      return res.status(400).json({ error: "Doctor name and phone are required" });
+    }
+
     const hashedPassword = await bcrypt.hash(cleanPassword, saltRounds);
 
     const user = await User.create({
@@ -253,6 +289,9 @@ router.post("/onboarding/register", upload.none(), async (req, res) => {
       age: parsedAge,
       gender: cleanGender,
       height: parsedHeight,
+      doctor_id: selectedDoctorId,
+      doctor_name: selectedDoctorName,
+      doctor_phone: selectedDoctorPhone,
       password: hashedPassword,
       role: "user",
       isVerified: true,
@@ -271,6 +310,9 @@ router.post("/onboarding/register", upload.none(), async (req, res) => {
         age: user.age,
         gender: user.gender,
         height: user.height,
+        doctor_id: user.doctor_id,
+        doctor_name: user.doctor_name,
+        doctor_phone: user.doctor_phone,
         role: user.role,
         isVerified: user.isVerified,
       },
@@ -305,6 +347,61 @@ router.post("/users/device", upload.none(), requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("Save user device error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.get("/doctors", async (req, res) => {
+  try {
+    const doctors = await Doctor.findAll({
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.status(200).json({
+      doctors: doctors.map(serializeDoctor),
+    });
+  } catch (err) {
+    console.error("Get doctors error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.post("/admin/doctors", upload.none(), requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim();
+    const phone = normalizePhone(req.body.phone);
+
+    if (!name || !phone) {
+      return res.status(400).json({ error: "Doctor name and phone are required" });
+    }
+
+    const doctor = await Doctor.create({ name, phone });
+    return res.status(201).json({
+      message: "Doctor added successfully",
+      doctor: serializeDoctor(doctor),
+    });
+  } catch (err) {
+    console.error("Create doctor error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/admin/doctors/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const doctor = await Doctor.findByPk(req.params.id);
+    if (!doctor) {
+      return res.status(404).json({ error: "Doctor not found" });
+    }
+
+    await User.update(
+      { doctor_id: null },
+      { where: { doctor_id: doctor.id } }
+    );
+    await doctor.destroy();
+
+    return res.status(200).json({ message: "Doctor deleted successfully" });
+  } catch (err) {
+    console.error("Delete doctor error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -563,12 +660,38 @@ router.post("/login", upload.none(), async (req, res) => {
         age: user.age,
         gender: user.gender,
         height: user.height,
+        doctor_id: user.doctor_id,
+        doctor_name: user.doctor_name,
+        doctor_phone: user.doctor_phone,
       },
       token,
     });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+router.delete("/users/me", requireAuth, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.authUser.id, {
+      include: { model: UserDevice, as: "devices" },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (user.role === "admin") {
+      return res.status(403).json({ error: "Admin accounts cannot be deleted here" });
+    }
+
+    await user.destroy();
+
+    return res.status(200).json({ message: "Account deleted successfully" });
+  } catch (err) {
+    console.error("Delete current user error:", err);
+    return res.status(500).json({ error: "Delete failed" });
   }
 });
 
